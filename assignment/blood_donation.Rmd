@@ -1,0 +1,219 @@
+---
+title: "Blood donation solution using Neural Networks"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Description
+Use information about each donor's history:
+
+- Months since Last Donation: this is the number of monthis since this donor's most recent donation.
+- Number of Donations: this is the total number of donations that the donor has made.
+- Total Volume Donated: this is the total amound of blood that the donor has donated in cubuc centimeters.
+- Months since First Donation: this is the number of months since the donor's first donation.
+
+## Problems
+
+1. BUILD A PREDICTING MODEL BASED ON DONOR'S HISTORY AND OUTCOME OF MADE DONATION IN MARCH 2007
+2. USING MODEL BUILT IN PROBLEM 1, PREDICT THE OUTCOME OF DONATIONS IN NEXT BLOOD DONATION CAMPAIGN (Assume that next donation will be on May 2007)
+
+## Solution
+```{r results = 'hide', echo = FALSE, message = FALSE, warning = FALSE}
+# Load necessary packages
+library(neuralnet)
+library(tidyr)
+library(dplyr)
+library(gmodels)
+library(ggplot2)
+library(cowplot)
+```
+### Load and prepare blood donation dataset
+
+Load the training dataset into data frame `bd` 
+```{r}
+bd <- read.csv('blood_donation.csv')
+head(bd)
+str(bd)
+```
+
+### Explore the distributed single variable plot
+
+```{r echo=FALSE}
+jitter <- ggplot(bd, aes(factor(Made.Donation.in.March.2007), Number.of.Donations, col = factor(Made.Donation.in.March.2007))) + geom_jitter() + theme(legend.position="none")
+boxplot <- ggplot(bd, aes(factor(Made.Donation.in.March.2007), Number.of.Donations, col = factor(Made.Donation.in.March.2007))) + geom_boxplot() + theme(legend.position="none")
+plot_grid(jitter, boxplot, ncol = 2, nrow = 1)
+```
+```{r echo=FALSE}
+jitter <- ggplot(bd, aes(factor(Made.Donation.in.March.2007), Total.Volume.Donated..c.c.., col = factor(Made.Donation.in.March.2007))) + geom_jitter() + theme(legend.position="none")
+boxplot <- ggplot(bd, aes(factor(Made.Donation.in.March.2007), Total.Volume.Donated..c.c.., col = factor(Made.Donation.in.March.2007))) + geom_boxplot() + theme(legend.position="none")
+plot_grid(jitter, boxplot, ncol = 2, nrow = 1)
+```
+```{r echo=FALSE}
+jitter <- ggplot(bd, aes(factor(Made.Donation.in.March.2007), Months.since.First.Donation, col = factor(Made.Donation.in.March.2007))) + geom_jitter() + theme(legend.position="none")
+boxplot <- ggplot(bd, aes(factor(Made.Donation.in.March.2007), Months.since.First.Donation, col = factor(Made.Donation.in.March.2007))) + geom_boxplot() + theme(legend.position="none")
+plot_grid(jitter, boxplot, ncol = 2, nrow = 1)
+```
+```{r echo=FALSE}
+jitter <- ggplot(bd, aes(factor(Made.Donation.in.March.2007), Months.since.Last.Donation, col = factor(Made.Donation.in.March.2007))) + geom_jitter() + theme(legend.position="none")
+boxplot <- ggplot(bd, aes(factor(Made.Donation.in.March.2007), Months.since.Last.Donation, col = factor(Made.Donation.in.March.2007))) + geom_boxplot() + theme(legend.position="none")
+plot_grid(jitter, boxplot, ncol = 2, nrow = 1)
+```
+
+### Explore the 2 variables combination plot
+
+```{r echo=FALSE}
+j1 <- ggplot(bd, aes(Number.of.Donations, Total.Volume.Donated..c.c.., col = factor(Made.Donation.in.March.2007))) + geom_jitter() + theme(legend.position="none")
+j2 <- ggplot(bd, aes(Number.of.Donations, Months.since.First.Donation, col = factor(Made.Donation.in.March.2007))) + geom_jitter() + theme(legend.position="none")
+j3 <- ggplot(bd, aes(Number.of.Donations, Months.since.Last.Donation, col = factor(Made.Donation.in.March.2007))) + geom_jitter() + theme(legend.position="none")
+j4 <- ggplot(bd, aes(Months.since.First.Donation, Months.since.Last.Donation, col = factor(Made.Donation.in.March.2007))) + geom_jitter() + theme(legend.position="none")
+plot_grid(j1, j2, j3, j4, ncol = 2, nrow = 2)
+```
+
+**Summary:**
+
+- Two variables `Number.of.Donations` and `Total.Volume.Donated..c.c..` strictly linearly dependent to each other so we could remove one of these out of dataset without decreasing effectiveness of our predicting model
+- Since the data points are not linearly separated, we should introduce some features to help the predicting model, namely `DonationPerMonth` and `MonthPerDonation` computed as follow:
+
+$$DonateDuration = Months.since.First.Donation - Months.since.Last.Donation$$
+$$DonationsPerMonth = \frac{Number.of.Donations}{DonateDuration}$$
+$$MonthsPerDonation = \frac{DonateDuration}{Number.of.Donations}$$
+
+### Prepare the training dataset
+
+```{r}
+prepare <- function (data) {
+  data %>%
+  rename(MonthsLD = Months.since.Last.Donation,
+         NumberDonations = Number.of.Donations,
+         TotalVolume = Total.Volume.Donated..c.c..,
+         MonthsFD = Months.since.First.Donation,
+         March.2007 = Made.Donation.in.March.2007) %>%
+  # mutate(March.2007 = as.factor(March.2007)) %>%
+  mutate(DonateDuration = MonthsFD - MonthsLD + 1) %>%
+  mutate(DonationsPerMonth = NumberDonations / DonateDuration) %>%
+  mutate(MonthsPerDonation = DonateDuration / NumberDonations) %>%
+  select(NumberDonations,
+         MonthsFD,
+         MonthsLD,
+         # TotalVolume,
+         # DonateDuration,
+         DonationsPerMonth,
+         MonthsPerDonation,
+         March.2007)
+}
+bd.prepared <- prepare(bd)
+head(bd.prepared)
+str(bd.prepared)
+```
+
+Split the original training set into training and validation sets
+```{r}
+n <- nrow(bd.prepared)
+s <- sample(1:n, 2*n/3)
+bd.train <- bd.prepared[s,]
+head(bd.train)
+bd.validate <- bd.prepared[-s,]
+head(bd.validate)
+```
+
+#### Logistic model
+
+First we will train a simple logistic model first to compare with neural network later on
+```{r}
+bd.logis <- glm(data = bd.train,
+                March.2007 ~ NumberDonations + MonthsFD + MonthsLD + DonationsPerMonth + MonthsPerDonation,
+                family = binomial)
+
+summary(bd.logis)
+
+bd.logis.predict <- predict(bd.logis, bd.validate, type = "response")
+
+CrossTable(x = bd.validate$March.2007, y = round(bd.logis.predict), prop.chisq = TRUE)
+```
+
+#### Neural networks
+
+```{r}
+bd.nn <- neuralnet(March.2007 ~ NumberDonations + MonthsFD + MonthsLD + DonationsPerMonth + MonthsPerDonation,
+                   bd.train, act.fct = "logistic", hidden = c(3), threshold = 0.01, stepmax = 10000)
+
+summary(bd.nn)
+
+bd.nn.predict <- neuralnet::compute(bd.nn, select(bd.validate,
+                                                  NumberDonations,
+                                                  MonthsFD,
+                                                  MonthsLD,
+                                                  DonationsPerMonth,
+                                                  MonthsPerDonation))
+
+bd.nn.predict.result <- round(bd.nn.predict$net.result)
+
+CrossTable(x = bd.validate$March.2007, y = bd.nn.predict.result, prop.chisq = TRUE)
+```
+
+## Testing 
+
+Load and prepare the testing dataset into data frame `bd.test`
+```{r}
+bd.test <- read.csv('blood_donation_test.csv')
+bd.test <- prepare(bd.test)
+head(bd)
+str(bd)
+```
+
+Test the logistic model
+```{r}
+bd.logis.test <- predict(bd.logis, bd.test, type = "response")
+
+CrossTable(x = bd.test$March.2007, y = round(bd.logis.test), prop.chisq = TRUE)
+```
+
+Compare with neural networks
+```{r}
+bd.nn.test <- neuralnet::compute(bd.nn, select(bd.test,
+                                               NumberDonations,
+                                               MonthsFD,
+                                               MonthsLD,
+                                               DonationsPerMonth,
+                                               MonthsPerDonation))
+
+bd.nn.test.result <- round(bd.nn.test$net.result)
+
+CrossTable(x = bd.test$March.2007, y = bd.nn.test.result, prop.chisq = TRUE)
+```
+
+## Problem 2: using model built in problem 1, predict the outcome of donations in next blood donation campaign
+
+Modify the original `bd` dataset to reflect accumulative data at May 2007
+
+- If person donate at March 2007 (`Made.Donation.in.March.2007` equal 1) then his/her `Number.of.Donations` will increase by 1 and `Months.since.Last.Donation` will be reset to 2
+- If person not join the donation at March 2007 then his/her `Number.of.Donations` remain the same and `Months.since.Last.Donation` will increase by 2
+
+```{r}
+bd2 <- bd %>%
+  mutate(Months.since.First.Donation = Months.since.First.Donation + 2) %>%
+  mutate(Months.since.Last.Donation = if_else(Made.Donation.in.March.2007 == 1,
+                                              2, Months.since.Last.Donation + 2)) %>%
+  mutate(Number.of.Donations = Number.of.Donations + Made.Donation.in.March.2007) %>%
+  prepare()
+```
+
+Predict the outcome of donation at May 2007 using the previous neural networks
+```{r}
+bd2.predict <- neuralnet::compute(bd.nn, select(bd2,
+                                                NumberDonations,
+                                                MonthsFD,
+                                                MonthsLD,
+                                                DonationsPerMonth,
+                                                MonthsPerDonation))
+
+bd2.predict.df <- data.frame(probability = bd2.predict$net.result,
+                             prediction = round(bd2.predict$net.result))
+summary(bd2.predict.df)
+```
+
+
+
